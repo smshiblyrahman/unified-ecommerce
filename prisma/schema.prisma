@@ -1,0 +1,581 @@
+// DeviceNagar — Unified Commerce Platform
+// Prisma Schema v1.0
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────
+
+enum SalesChannel {
+  ONLINE
+  POS
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  PARTIALLY_PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  MOBILE_BANKING
+  BANK_TRANSFER
+  ONLINE_PAYMENT
+  COD
+  OTHER
+}
+
+enum InventoryTransactionType {
+  SALE
+  RETURN
+  ADJUSTMENT
+  RESERVE
+  RELEASE
+  DAMAGE
+  RESTOCK
+  INITIAL
+  TRANSFER
+}
+
+enum StockStatus {
+  AVAILABLE
+  RESERVED
+  DAMAGED
+  RETURNED
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  CASHIER
+  CUSTOMER
+}
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
+}
+
+enum ReturnStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  RECEIVED
+  REFUNDED
+}
+
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+  DRAFT
+  ARCHIVED
+}
+
+enum ReservationStatus {
+  ACTIVE
+  RELEASED
+  EXPIRED
+  CONVERTED
+}
+
+// ─────────────────────────────────────────────────────────
+// USER & AUTH
+// ─────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      UserRole @default(CASHIER)
+  phone     String?
+  avatar    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  orders               Order[]
+  inventoryTransactions InventoryTransaction[]
+  posShifts            PosShift[]
+  posCashMovements     PosCashMovement[]
+  auditLogs            AuditLog[]
+  stockAdjustments     StockReservation[]
+
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────
+// CUSTOMER
+// ─────────────────────────────────────────────────────────
+
+model Customer {
+  id          String    @id @default(cuid())
+  name        String
+  email       String?   @unique
+  phone       String?
+  address     String?
+  city        String?
+  country     String?   @default("Bangladesh")
+  isWalkIn    Boolean   @default(false)
+  totalOrders Int       @default(0)
+  totalSpent  Decimal   @default(0) @db.Decimal(15, 2)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  orders   Order[]
+  invoices Invoice[]
+
+  @@map("customers")
+}
+
+// ─────────────────────────────────────────────────────────
+// LOCATION (Multi-location ready, single in v1)
+// ─────────────────────────────────────────────────────────
+
+model Location {
+  id        String   @id @default(cuid())
+  name      String
+  address   String?
+  phone     String?
+  isDefault Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  inventories  Inventory[]
+  posTerminals PosTerminal[]
+
+  @@map("locations")
+}
+
+// ─────────────────────────────────────────────────────────
+// PRODUCT CATALOG
+// ─────────────────────────────────────────────────────────
+
+model Category {
+  id          String    @id @default(cuid())
+  name        String
+  slug        String    @unique
+  description String?
+  imageUrl    String?
+  parentId    String?
+  parent      Category? @relation("CategoryParent", fields: [parentId], references: [id])
+  children    Category[] @relation("CategoryParent")
+  products    Product[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("categories")
+}
+
+model Product {
+  id          String        @id @default(cuid())
+  name        String
+  slug        String        @unique
+  description String?
+  sku         String?       @unique
+  barcode     String?       @unique
+  imageUrl    String?
+  images      String[]      @default([])
+  categoryId  String?
+  category    Category?     @relation(fields: [categoryId], references: [id])
+  costPrice   Decimal?      @db.Decimal(15, 2)
+  basePrice   Decimal       @db.Decimal(15, 2)
+  comparePrice Decimal?     @db.Decimal(15, 2)
+  taxRate     Decimal       @default(0) @db.Decimal(5, 2)
+  hasVariants Boolean       @default(false)
+  trackStock  Boolean       @default(true)
+  status      ProductStatus @default(ACTIVE)
+  tags        String[]      @default([])
+  weight      Decimal?      @db.Decimal(10, 3)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  variants    ProductVariant[]
+  inventory   Inventory[]
+  orderItems  OrderItem[]
+
+  @@map("products")
+}
+
+model ProductVariant {
+  id         String   @id @default(cuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name       String
+  sku        String?  @unique
+  barcode    String?  @unique
+  options    Json     @default("{}") // { size: "XL", color: "Red" }
+  price      Decimal  @db.Decimal(15, 2)
+  costPrice  Decimal? @db.Decimal(15, 2)
+  imageUrl   String?
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  inventory  Inventory[]
+  orderItems OrderItem[]
+
+  @@map("product_variants")
+}
+
+// ─────────────────────────────────────────────────────────
+// CENTRAL INVENTORY — ONE SOURCE OF TRUTH
+// ─────────────────────────────────────────────────────────
+
+model Inventory {
+  id           String    @id @default(cuid())
+  productId    String
+  product      Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variantId    String?
+  variant      ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  locationId   String?
+  location     Location? @relation(fields: [locationId], references: [id])
+
+  // Stock quantities
+  quantity     Int       @default(0)
+  reserved     Int       @default(0) // held by pending checkouts
+  damaged      Int       @default(0)
+
+  // Computed: available = quantity - reserved
+  lowStockThreshold Int  @default(5)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  transactions InventoryTransaction[]
+  reservations StockReservation[]
+
+  @@unique([productId, variantId, locationId])
+  @@map("inventories")
+}
+
+model InventoryTransaction {
+  id              String                   @id @default(cuid())
+  inventoryId     String
+  inventory       Inventory                @relation(fields: [inventoryId], references: [id])
+  type            InventoryTransactionType
+  previousStock   Int
+  quantityChange  Int  // positive = increase, negative = decrease
+  newStock        Int
+  channel         SalesChannel?
+  orderId         String?
+  order           Order?   @relation(fields: [orderId], references: [id])
+  returnId        String?
+  orderReturn     OrderReturn? @relation(fields: [returnId], references: [id])
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id])
+  notes           String?
+  createdAt       DateTime @default(now())
+
+  @@index([inventoryId])
+  @@index([orderId])
+  @@index([type])
+  @@index([channel])
+  @@index([createdAt])
+  @@map("inventory_transactions")
+}
+
+model StockReservation {
+  id          String            @id @default(cuid())
+  inventoryId String
+  inventory   Inventory         @relation(fields: [inventoryId], references: [id])
+  quantity    Int
+  customerId  String?
+  sessionId   String?
+  userId      String?
+  user        User?             @relation(fields: [userId], references: [id])
+  status      ReservationStatus @default(ACTIVE)
+  expiresAt   DateTime
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([inventoryId])
+  @@index([expiresAt])
+  @@index([status])
+  @@map("stock_reservations")
+}
+
+// ─────────────────────────────────────────────────────────
+// ORDER SYSTEM — UNIFIED ACROSS ALL CHANNELS
+// ─────────────────────────────────────────────────────────
+
+model Order {
+  id              String        @id @default(cuid())
+  orderNumber     String        @unique
+  channel         SalesChannel
+  status          OrderStatus   @default(PENDING)
+  paymentStatus   PaymentStatus @default(PENDING)
+
+  customerId      String?
+  customer        Customer?     @relation(fields: [customerId], references: [id])
+  userId          String?       // admin/cashier who created
+  user            User?         @relation(fields: [userId], references: [id])
+  posTerminalId   String?
+  posTerminal     PosTerminal?  @relation(fields: [posTerminalId], references: [id])
+  posShiftId      String?
+  posShift        PosShift?     @relation(fields: [posShiftId], references: [id])
+
+  // Pricing
+  subtotal        Decimal       @db.Decimal(15, 2)
+  discountAmount  Decimal       @default(0) @db.Decimal(15, 2)
+  discountCode    String?
+  taxAmount       Decimal       @default(0) @db.Decimal(15, 2)
+  shippingAmount  Decimal       @default(0) @db.Decimal(15, 2)
+  totalAmount     Decimal       @db.Decimal(15, 2)
+
+  // Shipping (online orders)
+  shippingAddress Json?
+  notes           String?
+  customerNote    String?
+
+  // Timestamps
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  completedAt     DateTime?
+
+  items           OrderItem[]
+  payments        Payment[]
+  invoice         Invoice?
+  returns         OrderReturn[]
+  inventoryTransactions InventoryTransaction[]
+
+  @@index([channel])
+  @@index([status])
+  @@index([createdAt])
+  @@index([customerId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id          String    @id @default(cuid())
+  orderId     String
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id])
+  variantId   String?
+  variant     ProductVariant? @relation(fields: [variantId], references: [id])
+  productName String    // snapshot at time of sale
+  variantName String?
+  sku         String?
+  imageUrl    String?
+  quantity    Int
+  unitPrice   Decimal   @db.Decimal(15, 2)
+  costPrice   Decimal?  @db.Decimal(15, 2)
+  discountAmount Decimal @default(0) @db.Decimal(15, 2)
+  taxAmount   Decimal   @default(0) @db.Decimal(15, 2)
+  totalAmount Decimal   @db.Decimal(15, 2)
+  createdAt   DateTime  @default(now())
+
+  returnItems OrderReturnItem[]
+
+  @@map("order_items")
+}
+
+// ─────────────────────────────────────────────────────────
+// PAYMENT
+// ─────────────────────────────────────────────────────────
+
+model Payment {
+  id              String        @id @default(cuid())
+  orderId         String
+  order           Order         @relation(fields: [orderId], references: [id])
+  method          PaymentMethod
+  amount          Decimal       @db.Decimal(15, 2)
+  status          PaymentStatus @default(PENDING)
+  reference       String?       // card last4, mobile TxID, etc.
+  notes           String?
+  processedAt     DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([orderId])
+  @@map("payments")
+}
+
+// ─────────────────────────────────────────────────────────
+// INVOICE
+// ─────────────────────────────────────────────────────────
+
+model Invoice {
+  id             String       @id @default(cuid())
+  invoiceNumber  String       @unique
+  orderId        String       @unique
+  order          Order        @relation(fields: [orderId], references: [id])
+  customerId     String?
+  customer       Customer?    @relation(fields: [customerId], references: [id])
+  channel        SalesChannel
+  subtotal       Decimal      @db.Decimal(15, 2)
+  discountAmount Decimal      @default(0) @db.Decimal(15, 2)
+  taxAmount      Decimal      @default(0) @db.Decimal(15, 2)
+  shippingAmount Decimal      @default(0) @db.Decimal(15, 2)
+  totalAmount    Decimal      @db.Decimal(15, 2)
+  notes          String?
+  pdfUrl         String?
+  issuedAt       DateTime     @default(now())
+  dueAt          DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([channel])
+  @@index([issuedAt])
+  @@map("invoices")
+}
+
+// ─────────────────────────────────────────────────────────
+// RETURNS & REFUNDS
+// ─────────────────────────────────────────────────────────
+
+model OrderReturn {
+  id          String        @id @default(cuid())
+  returnNumber String       @unique
+  orderId     String
+  order       Order         @relation(fields: [orderId], references: [id])
+  reason      String?
+  status      ReturnStatus  @default(REQUESTED)
+  refundAmount Decimal      @default(0) @db.Decimal(15, 2)
+  refundMethod PaymentMethod?
+  notes       String?
+  addToStock  Boolean       @default(true) // if false, mark as damaged
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  items            OrderReturnItem[]
+  inventoryTransactions InventoryTransaction[]
+
+  @@map("order_returns")
+}
+
+model OrderReturnItem {
+  id          String      @id @default(cuid())
+  returnId    String
+  orderReturn OrderReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  orderItemId String
+  orderItem   OrderItem   @relation(fields: [orderItemId], references: [id])
+  quantity    Int
+  isDamaged   Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+
+  @@map("order_return_items")
+}
+
+// ─────────────────────────────────────────────────────────
+// POS SYSTEM
+// ─────────────────────────────────────────────────────────
+
+model PosTerminal {
+  id         String   @id @default(cuid())
+  name       String
+  identifier String   @unique // "POS-01", "POS-02"
+  locationId String?
+  location   Location? @relation(fields: [locationId], references: [id])
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  shifts PosShift[]
+  orders Order[]
+
+  @@map("pos_terminals")
+}
+
+model PosShift {
+  id              String      @id @default(cuid())
+  terminalId      String
+  terminal        PosTerminal @relation(fields: [terminalId], references: [id])
+  userId          String
+  user            User        @relation(fields: [userId], references: [id])
+  status          ShiftStatus @default(OPEN)
+  openingBalance  Decimal     @db.Decimal(15, 2)
+  cashSales       Decimal     @default(0) @db.Decimal(15, 2)
+  cashRefunds     Decimal     @default(0) @db.Decimal(15, 2)
+  expectedBalance Decimal     @default(0) @db.Decimal(15, 2)
+  actualBalance   Decimal?    @db.Decimal(15, 2)
+  variance        Decimal?    @db.Decimal(15, 2)
+  notes           String?
+  openedAt        DateTime    @default(now())
+  closedAt        DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  orders        Order[]
+  cashMovements PosCashMovement[]
+
+  @@index([status])
+  @@map("pos_shifts")
+}
+
+model PosCashMovement {
+  id        String   @id @default(cuid())
+  shiftId   String
+  shift     PosShift @relation(fields: [shiftId], references: [id])
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  type      String   // SALE, REFUND, WITHDRAWAL, ADDITION
+  amount    Decimal  @db.Decimal(15, 2)
+  notes     String?
+  createdAt DateTime @default(now())
+
+  @@map("pos_cash_movements")
+}
+
+// ─────────────────────────────────────────────────────────
+// AUDIT LOG
+// ─────────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  event      String   // ORDER_CREATED, STOCK_DEDUCTED, etc.
+  entityType String?
+  entityId   String?
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  metadata   Json?
+  channel    SalesChannel?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([event])
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ─────────────────────────────────────────────────────────
+// SETTINGS
+// ─────────────────────────────────────────────────────────
+
+model Setting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}
