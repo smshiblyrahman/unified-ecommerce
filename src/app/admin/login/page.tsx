@@ -15,12 +15,17 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     setError("");
-    const res = await signIn("credentials", { email, password, redirect: false });
-    if (res?.error) {
-      setError("Invalid email or password");
+    try {
+      const res = await signIn("credentials", { email, password, redirect: false });
+      if (res?.error) {
+        setError("Invalid email or password");
+        setLoading(false);
+      } else {
+        window.location.href = "/admin";
+      }
+    } catch (err: unknown) {
+      setError("Login failed. Please try again.");
       setLoading(false);
-    } else {
-      router.push("/admin");
     }
   };
 
